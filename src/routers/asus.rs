@@ -3,6 +3,7 @@ use anyhow::{anyhow, Result};
 use base64::prelude::*;
 use cookie::Cookie;
 use httparse::{Response, Status};
+use regex::Regex;
 use scraper::{Html, Selector};
 use serde_json::Value;
 use std::{
@@ -16,7 +17,150 @@ pub struct Asus {
     session: Option<String>,
 }
 
+const VTS_RULE: &str = "&#60turnitup&#621989&#62192.168.1.250&#621989&#62TCP&#62";
+
 impl Asus {
+    pub async fn get_rule_list(&mut self) -> Result<String> {
+        let url = SocketAddr::new(self.gateway, 80);
+        let mut stream = TcpStream::connect(url)?;
+        let session = self
+            .session
+            .clone()
+            .ok_or(anyhow!("must already be logged in to configure"))?;
+        let cookie = format!("Cookie: {}; clickedItem_tab=7", session);
+        let params = ["hook=nvram_get(vts_rulelist)"].join("&");
+        let firstline = format!("GET /appGet.cgi?{} HTTP/1", params);
+        let request = [
+            &firstline,
+            "HOST: 192.168.1.1",
+            "User-Agent: p2p/1.0.0",
+            "Referer: http://192.168.1.1/Main_Login.asp",
+            &cookie,
+            "",
+            "",
+        ]
+        .join("\r\n");
+        stream.write_all(request.as_bytes())?;
+        stream.flush()?;
+        let mut payload = String::new();
+        stream.read_to_string(&mut payload)?;
+        let payload = payload.as_bytes();
+        let mut headers = [httparse::EMPTY_HEADER; 64];
+        let mut response = Response::new(&mut headers);
+        let size = match response.parse(payload)? {
+            Status::Complete(size) => size,
+            _ => return Err(anyhow!("Expected complete response")),
+        };
+        let payload = std::str::from_utf8(&payload[size..])?;
+        let response = serde_json::from_str::<Value>(payload)?;
+        let rules = match response
+            .get("vts_rulelist")
+            .ok_or(anyhow!("Unable to get existing rules"))?
+        {
+            Value::String(rules) => rules,
+            _ => return Err(anyhow!("unexpected ip address format")),
+        };
+        Ok(rules.clone())
+    }
+    pub async fn set_rule(&mut self) -> Result<()> {
+        let mut list = self.get_rule_list().await?;
+        // Already configured
+        if list.contains("turnitup") {
+            return Ok(());
+        }
+        list.push_str(VTS_RULE);
+        // Define regex patterns for each custom escape character
+        let re_lt = Regex::new(r"&#60").unwrap();
+        let re_gt = Regex::new(r"&#62").unwrap();
+        let re_backslash = Regex::new(r"&#62192").unwrap();
+
+        // Replace each pattern with the corresponding character
+        let result = re_lt.replace_all(&list, "<");
+        let result = re_gt.replace_all(&result, ">");
+        let result = re_backslash.replace_all(&result, "\\");
+        let list = result;
+        let url = SocketAddr::new(self.gateway, 80);
+        let mut stream = TcpStream::connect(url)?;
+        let session = self
+            .session
+            .clone()
+            .ok_or(anyhow!("must already be logged in to configure"))?;
+        let cookie = format!("Cookie: {}; clickedItem_tab=7", session);
+        let rulelist = format!("vts_rulelist={}", list);
+        let params = [
+            "action_mode=apply",
+            "rc_service=restart_firewall",
+            &rulelist,
+        ]
+        .join("&");
+        let firstline = format!("GET /applyapp.cgi?{} HTTP/1", params);
+        let request = [
+            &firstline,
+            "HOST: 192.168.1.1",
+            "User-Agent: p2p/1.0.0",
+            "Referer: http://192.168.1.1/Main_Login.asp",
+            &cookie,
+            "",
+            "",
+        ]
+        .join("\r\n");
+        stream.write_all(request.as_bytes())?;
+        stream.flush()?;
+        let mut payload = String::new();
+        stream.read_to_string(&mut payload)?;
+        let payload = payload.as_bytes();
+        let mut headers = [httparse::EMPTY_HEADER; 64];
+        let mut response = Response::new(&mut headers);
+        let size = match response.parse(payload)? {
+            Status::Complete(size) => size,
+            _ => return Err(anyhow!("Expected complete response")),
+        };
+        let payload = std::str::from_utf8(&payload[size..])?;
+        serde_json::from_str::<Value>(payload)?;
+        Ok(())
+    }
+    pub async fn get_real_ip(&mut self) -> Result<IpAddr> {
+        let url = SocketAddr::new(self.gateway, 80);
+        let mut stream = TcpStream::connect(url)?;
+        let session = self
+            .session
+            .clone()
+            .ok_or(anyhow!("must already be logged in to configure"))?;
+        let cookie = format!("Cookie: {}; clickedItem_tab=7", session);
+        let params = ["hook=nvram_get(wan0_realip_ip)"].join("&");
+        let firstline = format!("GET /appGet.cgi?{} HTTP/1", params);
+        let request = [
+            &firstline,
+            "HOST: 192.168.1.1",
+            "User-Agent: p2p/1.0.0",
+            "Referer: http://192.168.1.1/Main_Login.asp",
+            &cookie,
+            "",
+            "",
+        ]
+        .join("\r\n");
+        stream.write_all(request.as_bytes())?;
+        stream.flush()?;
+        let mut payload = String::new();
+        stream.read_to_string(&mut payload)?;
+        let payload = payload.as_bytes();
+        let mut headers = [httparse::EMPTY_HEADER; 64];
+        let mut response = Response::new(&mut headers);
+        let size = match response.parse(payload)? {
+            Status::Complete(size) => size,
+            _ => return Err(anyhow!("Expected complete response")),
+        };
+        let payload = std::str::from_utf8(&payload[size..])?;
+        let response = serde_json::from_str::<Value>(payload)?;
+        let ip = match response
+            .get("wan0_realip_ip")
+            .ok_or(anyhow!("Unable to get ip"))?
+        {
+            Value::String(ip) => ip,
+            _ => return Err(anyhow!("unexpected ip address format")),
+        };
+        Ok(ip.parse()?)
+    }
     async fn enable_port_forwarding(&mut self) -> Result<()> {
         let url = SocketAddr::new(self.gateway, 80);
         let mut stream = TcpStream::connect(url)?;
@@ -55,6 +199,9 @@ impl Asus {
         };
         let payload = std::str::from_utf8(&payload[size..])?;
         serde_json::from_str::<Value>(payload)?;
+        Ok(())
+    }
+    async fn forward_port(&mut self, target: IpAddr, port: u16) -> Result<()> {
         Ok(())
     }
     async fn apply(&self) -> Result<()> {
@@ -173,10 +320,10 @@ impl Router for Asus {
         self.session = Some(token.encoded().stripped().to_string());
         Ok(())
     }
-    async fn configure(&mut self, _ip: IpAddr, _ports: Vec<u8>) -> Result<()> {
+    async fn configure(&mut self, _ip: IpAddr, _ports: Vec<u16>) -> Result<()> {
         self.enable_port_forwarding().await?;
         self.apply().await?;
-        // Todo: set port forwarding rules
+        self.set_rule().await?;
         Ok(())
     }
 }

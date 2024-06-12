@@ -9,6 +9,14 @@ use pnet::{
 use routers::Router;
 use std::net::IpAddr;
 
+const PORT: u16 = 1989;
+
+#[derive(Debug)]
+struct Address {
+    public: IpAddr,
+    private: IpAddr,
+}
+
 #[derive(Debug)]
 struct Interface {
     name: String,
@@ -53,48 +61,49 @@ fn get_ip_address(interface: &Interface) -> Option<IpAddr> {
         })
 }
 
-async fn asus(gateway: &IpAddr) -> Result<()> {
+async fn asus(interface: &Interface, gateway: &IpAddr) -> Result<Address> {
     let mut asus = routers::asus::Asus::new(*gateway);
     asus.probe().await?;
     println!("Detected {}", asus.descriptor());
-    asus.login(vec![
-        "retrohacker".into(),
-        "ShortageSlashedSmithGlancing".into(),
-    ])
-    .await?;
+    asus.login(vec!["username".into(), "password".into()])
+        .await?;
     println!("Logged in");
-    // Todo: set our IP address and desired ports
-    asus.configure(*gateway, Vec::new()).await?;
+    let ip = get_ip_address(interface).ok_or(anyhow!("Unable to find ip address"))?;
+    asus.configure(*gateway, vec![PORT]).await?;
     println!("Port forwarding configured");
-    Ok(())
+    Ok(Address {
+        private: ip,
+        public: asus.get_real_ip().await?,
+    })
 }
 
-async fn router(interface: &Interface) -> Result<IpAddr> {
+async fn router(interface: &Interface) -> Result<Address> {
     for gateway in interface.gateways.iter() {
-        if let Err(_) = asus(gateway).await {
-            continue;
+        match asus(interface, gateway).await {
+            Ok(addr) => return Ok(addr),
+            Err(e) => {
+                println!("{}", e);
+                continue;
+            }
         }
-        let ip = get_ip_address(interface).ok_or(anyhow!("Unable to find ip address"))?;
-        return Ok(ip);
     }
     Err(anyhow!("Unable to configure router"))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut addr: Option<IpAddr> = None;
+    let mut addr: Option<Address> = None;
     for interface in interfaces() {
-        if let Ok(ip) = router(&interface).await {
-            addr = Some(ip);
+        match router(&interface).await {
+            Ok(ip) => addr = Some(ip),
+            Err(e) => println!("{}", e),
         }
     }
     let addr = match addr {
         Some(ip) => ip,
         None => panic!("Unable to configure router"),
     };
-    println!("Router for {} configured", addr);
-    // Todo: discover public ip address
-    // Todo: configure libp2p relay server
-    // Todo: confirm we are routable
+    println!("Router for {:?} configured", addr);
+    relay::listen(addr.private, PORT);
     Ok(())
 }

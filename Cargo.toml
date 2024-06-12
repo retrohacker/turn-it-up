@@ -12,6 +12,7 @@ httparse = "1.9.3"
 libp2p = { version = "0.53.2", features = ["tokio", "noise", "macros", "ping", "tcp", "identify", "yamux", "relay", "quic"] }
 netdev = "0.28.0"
 pnet = "0.35.0"
+regex = "1.10.5"
 scraper = "0.19.0"
 serde_json = "1.0.117"
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }

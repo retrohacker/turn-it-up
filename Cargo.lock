@@ -3379,6 +3379,7 @@ dependencies = [
  "libp2p",
  "netdev",
  "pnet",
+ "regex",
  "scraper",
  "serde_json",
  "tokio",
