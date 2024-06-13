@@ -37,8 +37,8 @@ rendezvous server using their existing router.
 This software attempts to "fingerprint" a router and automatically configure it
 to act as a p2p relay.
 
-The p2p relay will configure itself to offer peer-to-peer connectivity to the
-user's social group (their friends and family).
+The p2p relay will configure itself and the user's router to offer peer-to-peer
+connectivity to the user's social group (their friends and family).
 
 When deployed as a network device (i.e. using a raspberry pi) and end-user
 should be able to plug this appliance in to the ethernet port on their router
